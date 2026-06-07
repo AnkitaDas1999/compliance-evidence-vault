@@ -1,0 +1,137 @@
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# Local test stack — Compliance Evidence Vault
+#
+# Services:
+#   postgres   — RDS substitute
+#   localstack — S3 substitute (AWS services emulated locally)
+#   setup      — one-shot init: creates DB schema, S3 bucket
+#   sast       — SAST scanner container (built from ./sast-scanner)
+#   pentest    — Pentest scanner container (built from ./pentest-scanner)
+#   target     — simple vulnerable Flask app to scan against (pentest target)
+# ---------------------------------------------------------------------------
+
+services:
+
+  # ---- PostgreSQL (RDS substitute) ----------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       vault
+      POSTGRES_USER:     vaultuser
+      POSTGRES_PASSWORD: vaultpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vaultuser -d vault"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---- LocalStack (S3 substitute) -----------------------------------------
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"
+    volumes:
+      - ls_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"s3\": \"running\"'"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  # ---- One-shot setup container -------------------------------------------
+  setup:
+    image: amazon/aws-cli:2.15.0
+    depends_on:
+      localstack: { condition: service_healthy }
+    environment:
+      AWS_ACCESS_KEY_ID:     test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION:    us-east-1
+    entrypoint: >
+      /bin/sh -c "
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://compliance-vault-reports 2>/dev/null || true;
+        echo 'S3 bucket ready';
+      "
+
+  # ---- Vulnerable target Flask app (pentest target) -----------------------
+  target:
+    build:
+      context: ./target-app
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---- SAST scanner -------------------------------------------------------
+  sast:
+    build:
+      context: ./sast-scanner
+    depends_on:
+      postgres:   { condition: service_healthy }
+      localstack: { condition: service_healthy }
+      setup:      { condition: service_completed_successfully }
+    environment:
+      # AWS (LocalStack)
+      AWS_ACCESS_KEY_ID:     test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION:    us-east-1
+      AWS_ENDPOINT_URL:      http://localstack:4566
+
+      # Job params
+      JOB_ID:          "test-sast-job-001"
+      S3_PRESIGNED_URL: ""          # set at runtime via --env-file or override
+      REPORT_BUCKET:   compliance-vault-reports
+
+      # DB (postgres service)
+      DB_HOST:     postgres
+      DB_PORT:     "5432"
+      DB_NAME:     vault
+      DB_USER:     vaultuser
+      DB_PASSWORD: vaultpass
+      DB_SSLMODE:  disable           # no TLS in local compose
+    profiles: ["sast"]              # run with: docker compose --profile sast up sast
+
+  # ---- Pentest scanner ----------------------------------------------------
+  pentest:
+    build:
+      context: ./pentest-scanner
+    depends_on:
+      postgres:   { condition: service_healthy }
+      localstack: { condition: service_healthy }
+      setup:      { condition: service_completed_successfully }
+      target:     { condition: service_healthy }
+    environment:
+      AWS_ACCESS_KEY_ID:     test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION:    us-east-1
+      AWS_ENDPOINT_URL:      http://localstack:4566
+
+      JOB_ID:        "test-pentest-job-001"
+      TARGET_URL:    "http://target:8080"
+      REPORT_BUCKET: compliance-vault-reports
+
+      DB_HOST:     postgres
+      DB_PORT:     "5432"
+      DB_NAME:     vault
+      DB_USER:     vaultuser
+      DB_PASSWORD: vaultpass
+      DB_SSLMODE:  disable
+    profiles: ["pentest"]
+
+volumes:
+  pg_data:
+  ls_data:
