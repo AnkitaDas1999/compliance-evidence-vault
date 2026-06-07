@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
 """
-local_test_runner.py
-====================
-Runs SAST and Pentest scanners locally WITHOUT Docker or AWS.
-
-Fixes vs v1:
-  - SAST: scanner module is reloaded fresh each run (fixes 0-findings bug
-    caused by Python module cache holding a stale requests.get reference)
-  - Pentest: --offline flag skips real HTTP probes so you don't need a
-    running target app; uses a built-in mock response instead
-  - Connection errors are caught gracefully instead of crashing
+Runs SAST and Pentest scanners locally without Docker or AWS.
 
 Usage:
     # SAST (no network needed):

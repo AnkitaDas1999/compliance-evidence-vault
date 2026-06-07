@@ -1,11 +1,11 @@
 """
-SAST Scanner — Compliance Evidence Vault
-Ankita Das | CS6620
+SAST Scanner
 
 Reads a .zip from S3 (pre-signed URL passed via env),
 runs regex-based static analysis across 11 vulnerability
 types, writes findings to RDS PostgreSQL, and uploads
 a hashed JSON report back to S3.
+
 """
 
 import os
