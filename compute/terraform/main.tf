@@ -2,7 +2,7 @@
 # Terraform module — Compute layer
 # ECS Fargate task definitions + ECR repos + S3 lifecycle policy
 #
-# Wired to Ishit's VPC: vpc-02eb7b9eda9780a61 (us-east-1, acct 126573932591)
+# Wired to Ishit's VPC: vpc-02eb7b9eda9780a61 (us-east-1, acct 850469653063)
 # ===========================================================================
 
 terraform {
@@ -34,7 +34,7 @@ variable "ecr_image_tag"              { default = "latest" }
 locals {
   prefix   = "${var.project}-compute"
   # AWS Academy LabRole — used instead of creating IAM roles
-  lab_role = "arn:aws:iam::126573932591:role/LabRole"
+  lab_role = "arn:aws:iam::850469653063:role/LabRole"
 }
 
 # ---------------------------------------------------------------------------

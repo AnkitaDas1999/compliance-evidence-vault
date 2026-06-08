@@ -5,7 +5,7 @@
 #
 # Usage:
 #   ./push_to_ecr.sh <aws-account-id> <aws-region>
-#   ./push_to_ecr.sh 126573932591 us-east-1
+#   ./push_to_ecr.sh 850469653063 us-east-1
 
 set -euo pipefail
 

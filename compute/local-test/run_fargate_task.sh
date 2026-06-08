@@ -17,7 +17,7 @@ set -euo pipefail
 
 MODE="${1:?Usage: $0 sast|pentest}"
 REGION="us-east-1"
-ACCOUNT_ID="126573932591"
+ACCOUNT_ID="850469653063"
 CLUSTER="compliance-vault-compute-cluster"
 BUCKET="compliance-vault-reports"
 JOB_ID="demo-$(date +%s)"
