@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────
+# Compliance Evidence Vault — .gitignore
+# ─────────────────────────────────────────
+
+# ── Terraform ─────────────────────────────
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# terraform.tfvars contains real subnet IDs, bucket names —
+# keep it out of git. Use terraform.tfvars.example instead.
+terraform.tfvars
+
+# ── AWS credentials (never commit these) ──
+.env
+.env.*
+*.pem
+*.key
+credentials
+aws_credentials.txt
+
+# ── Python ────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+
+# ── Docker ────────────────────────────────
+# Don't commit built image tarballs
+*.tar
+
+# ── Test artifacts ────────────────────────
+# Zip files generated during local testing
+*.zip
+/compute/local-test/test-upload*.zip
+/tmp/
+
+# ── OS / editor ───────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Logs ──────────────────────────────────
+*.log
+logs/
+
+# ── Node (if frontend is added later) ─────
+node_modules/

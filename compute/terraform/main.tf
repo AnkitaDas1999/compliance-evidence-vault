@@ -1,11 +1,8 @@
 # ===========================================================================
 # Terraform module — Compute layer
-# ECS Fargate task definitions + ECR image management + S3 lifecycle policy
+# ECS Fargate task definitions + ECR repos + S3 lifecycle policy
 #
-# Depends on:
-#   - var.vpc_id, var.private_subnet_ids  (Ishit's VPC module outputs)
-#   - var.rds_security_group_id           (Ishit's VPC module outputs)
-#   - var.report_bucket_name              (passed in from root module)
+# Wired to Ishit's VPC: vpc-02eb7b9eda9780a61 (us-east-1, acct 126573932591)
 # ===========================================================================
 
 terraform {
@@ -17,20 +14,27 @@ terraform {
   }
 }
 
+provider "aws" {
+  region = var.aws_region
+}
+
 # ---------------------------------------------------------------------------
 # Variables
 # ---------------------------------------------------------------------------
 
-variable "aws_region"            { default = "us-east-1" }
-variable "project"               { default = "compliance-vault" }
-variable "vpc_id"                { description = "VPC ID from Ishit's module" }
-variable "private_subnet_ids"    { description = "Private subnet IDs", type = list(string) }
-variable "rds_security_group_id" { description = "RDS SG — scanners need outbound 5432 to it" }
-variable "report_bucket_name"    { description = "S3 bucket for report uploads" }
-variable "ecr_image_tag"         { default = "latest" }
+variable "aws_region"                 { default = "us-east-1" }
+variable "project"                    { default = "compliance-vault" }
+# variable "vpc_id"                     { description = "Ishit's VPC ID" }
+# variable "private_subnet_ids"         { type = list(string) }
+# variable "rds_security_group_id"      { description = "Ishit's RDS SG — scanners send outbound 5432 to it" }
+# variable "fargate_security_group_id"  { description = "Ishit's Fargate SG" }
+variable "report_bucket_name"         { description = "S3 bucket for report uploads" }
+variable "ecr_image_tag"              { default = "latest" }
 
 locals {
-  prefix = "${var.project}-compute"
+  prefix   = "${var.project}-compute"
+  # AWS Academy LabRole — used instead of creating IAM roles
+  lab_role = "arn:aws:iam::126573932591:role/LabRole"
 }
 
 # ---------------------------------------------------------------------------
@@ -40,38 +44,36 @@ locals {
 resource "aws_ecr_repository" "sast" {
   name                 = "${local.prefix}-sast-scanner"
   image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true   # free basic ECR scanning
-  }
-
-  tags = { Component = "ankita-compute" }
-}
-
-resource "aws_ecr_repository" "pentest" {
-  name                 = "${local.prefix}-pentest-scanner"
-  image_tag_mutability = "MUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
   }
 
-  tags = { Component = "ankita-compute" }
+  tags = { Component = "ankita-compute", Owner = "ankita" }
 }
 
-# Lifecycle policy — keep only the last 10 images to control costs
+resource "aws_ecr_repository" "pentest" {
+  name                 = "${local.prefix}-pentest-scanner"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = { Component = "ankita-compute", Owner = "ankita" }
+}
+
+# Keep only the last 10 images to avoid storage costs
 resource "aws_ecr_lifecycle_policy" "sast" {
   repository = aws_ecr_repository.sast.name
   policy = jsonencode({
     rules = [{
       rulePriority = 1
       description  = "Keep last 10 images"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 10
-      }
-      action = { type = "expire" }
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 10 }
+      action       = { type = "expire" }
     }]
   })
 }
@@ -82,116 +84,7 @@ resource "aws_ecr_lifecycle_policy" "pentest" {
 }
 
 # ---------------------------------------------------------------------------
-# IAM — ECS task execution role (pull from ECR, write CloudWatch logs)
-# ---------------------------------------------------------------------------
-
-resource "aws_iam_role" "ecs_execution" {
-  name = "${local.prefix}-ecs-execution-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ecs-tasks.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_execution_managed" {
-  role       = aws_iam_role.ecs_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-# ---------------------------------------------------------------------------
-# IAM — ECS task role (scanner runtime permissions: S3 write, SSM read)
-# ---------------------------------------------------------------------------
-
-resource "aws_iam_role" "ecs_task" {
-  name = "${local.prefix}-ecs-task-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ecs-tasks.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-# S3 — write to reports/ prefix only (least privilege)
-resource "aws_iam_role_policy" "scanner_s3" {
-  name = "scanner-s3-write"
-  role = aws_iam_role.ecs_task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "WriteReports"
-        Effect = "Allow"
-        Action = ["s3:PutObject", "s3:PutObjectAcl"]
-        Resource = "arn:aws:s3:::${var.report_bucket_name}/reports/*"
-      },
-      {
-        Sid    = "ReadUploads"
-        Effect = "Allow"
-        Action = ["s3:GetObject"]
-        Resource = "arn:aws:s3:::${var.report_bucket_name}/uploads/*"
-      }
-    ]
-  })
-}
-
-# SSM Parameter Store — read DB credentials
-resource "aws_iam_role_policy" "scanner_ssm" {
-  name = "scanner-ssm-read"
-  role = aws_iam_role.ecs_task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["ssm:GetParameter", "ssm:GetParameters"]
-      Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/${var.project}/*"
-    }]
-  })
-}
-
-# ---------------------------------------------------------------------------
-# Security group for scanner tasks
-# ---------------------------------------------------------------------------
-
-resource "aws_security_group" "scanner" {
-  name        = "${local.prefix}-scanner-sg"
-  description = "ECS Fargate scanner tasks"
-  vpc_id      = var.vpc_id
-
-  # Outbound: HTTPS to pull images, reach S3/SSM via VPC endpoints
-  egress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTPS out — ECR, S3, SSM"
-  }
-
-  # Outbound: PostgreSQL to RDS SG only
-  egress {
-    from_port                = 5432
-    to_port                  = 5432
-    protocol                 = "tcp"
-    source_security_group_id = var.rds_security_group_id
-    description              = "PostgreSQL to RDS"
-  }
-
-  # No inbound — Fargate tasks are outbound-only workers
-  tags = { Component = "ankita-compute" }
-}
-
-# ---------------------------------------------------------------------------
-# CloudWatch log groups
+# CloudWatch log groups (Ankita owns these)
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "sast" {
@@ -215,10 +108,10 @@ resource "aws_ecs_cluster" "scanners" {
 
   setting {
     name  = "containerInsights"
-    value = "enabled"   # needed for CloudWatch CPU/memory metrics
+    value = "enabled"
   }
 
-  tags = { Component = "ankita-compute" }
+  tags = { Component = "ankita-compute", Owner = "ankita" }
 }
 
 resource "aws_ecs_cluster_capacity_providers" "scanners" {
@@ -232,7 +125,7 @@ resource "aws_ecs_cluster_capacity_providers" "scanners" {
 }
 
 # ---------------------------------------------------------------------------
-# ECS task definitions
+# ECS task definitions (using LabRole — no new IAM roles needed)
 # ---------------------------------------------------------------------------
 
 resource "aws_ecs_task_definition" "sast" {
@@ -241,18 +134,20 @@ resource "aws_ecs_task_definition" "sast" {
   network_mode             = "awsvpc"
   cpu                      = "512"
   memory                   = "1024"
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
-  task_role_arn            = aws_iam_role.ecs_task.arn
+  execution_role_arn       = local.lab_role
+  task_role_arn            = local.lab_role
 
   container_definitions = jsonencode([{
     name      = "sast-scanner"
     image     = "${aws_ecr_repository.sast.repository_url}:${var.ecr_image_tag}"
     essential = true
 
-    environment = []   # non-secret config here if needed
-
-    # Secrets injected at runtime by Step Functions via ECS overrides:
-    # JOB_ID, S3_PRESIGNED_URL, REPORT_BUCKET, DB_HOST, DB_NAME, DB_USER, DB_PASSWORD
+    # JOB_ID and S3_PRESIGNED_URL are injected at runtime
+    # by Step Functions via container environment overrides
+    environment = [
+      { name = "REPORT_BUCKET", value = var.report_bucket_name },
+      { name = "DB_SSLMODE",    value = "require" }
+    ]
 
     logConfiguration = {
       logDriver = "awslogs"
@@ -262,13 +157,9 @@ resource "aws_ecs_task_definition" "sast" {
         "awslogs-stream-prefix" = "ecs"
       }
     }
-
-    # Read-only root filesystem (security hardening)
-    readonlyRootFilesystem = false   # scanner needs /tmp for zip extraction
-    user                   = "scanner"
   }])
 
-  tags = { Component = "ankita-compute" }
+  tags = { Component = "ankita-compute", Owner = "ankita" }
 }
 
 resource "aws_ecs_task_definition" "pentest" {
@@ -277,15 +168,18 @@ resource "aws_ecs_task_definition" "pentest" {
   network_mode             = "awsvpc"
   cpu                      = "256"
   memory                   = "512"
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
-  task_role_arn            = aws_iam_role.ecs_task.arn
+  execution_role_arn       = local.lab_role
+  task_role_arn            = local.lab_role
 
   container_definitions = jsonencode([{
     name      = "pentest-scanner"
     image     = "${aws_ecr_repository.pentest.repository_url}:${var.ecr_image_tag}"
     essential = true
 
-    environment = []
+    environment = [
+      { name = "REPORT_BUCKET", value = var.report_bucket_name },
+      { name = "DB_SSLMODE",    value = "require" }
+    ]
 
     logConfiguration = {
       logDriver = "awslogs"
@@ -295,11 +189,9 @@ resource "aws_ecs_task_definition" "pentest" {
         "awslogs-stream-prefix" = "ecs"
       }
     }
-
-    user = "scanner"
   }])
 
-  tags = { Component = "ankita-compute" }
+  tags = { Component = "ankita-compute", Owner = "ankita" }
 }
 
 # ---------------------------------------------------------------------------
@@ -312,42 +204,56 @@ resource "aws_s3_bucket_lifecycle_configuration" "reports" {
   rule {
     id     = "reports-archive"
     status = "Enabled"
-
-    filter {
-      prefix = "reports/"
-    }
+    filter { prefix = "reports/" }
 
     transition {
       days          = 90
       storage_class = "GLACIER"
     }
-
     expiration {
-      days = 2555   # 7-year retention (SOC2 / HIPAA common requirement)
+      days = 2555   # 7-year retention for SOC2/HIPAA
     }
   }
 
   rule {
     id     = "uploads-cleanup"
     status = "Enabled"
-
-    filter {
-      prefix = "uploads/"
-    }
-
-    expiration {
-      days = 7   # raw uploads don't need long-term retention
-    }
+    filter { prefix = "uploads/" }
+    expiration { days = 7 }
   }
 }
 
 # ---------------------------------------------------------------------------
-# Outputs (consumed by Ishit's Step Functions module)
+# Outputs — shared with Ishit for Step Functions integration
 # ---------------------------------------------------------------------------
 
-output "sast_task_definition_arn"   { value = aws_ecs_task_definition.sast.arn }
-output "pentest_task_definition_arn" { value = aws_ecs_task_definition.pentest.arn }
-output "ecs_cluster_arn"            { value = aws_ecs_cluster.scanners.arn }
-output "scanner_security_group_id"  { value = aws_security_group.scanner.id }
-output "sast_ecr_url"               { value = aws_ecr_repository.sast.repository_url }
-output "pentest_ecr_url"            { value = aws_ecr_repository.pentest.repository_url }
+output "sast_task_definition_arn" {
+  value       = aws_ecs_task_definition.sast.arn
+  description = "Pass to Ishit for Step Functions ECS task ARN"
+}
+
+output "pentest_task_definition_arn" {
+  value       = aws_ecs_task_definition.pentest.arn
+  description = "Pass to Ishit for Step Functions ECS task ARN"
+}
+
+output "ecs_cluster_arn" {
+  value       = aws_ecs_cluster.scanners.arn
+  description = "Pass to Ishit for Step Functions cluster ARN"
+}
+
+output "sast_ecr_url" {
+  value = aws_ecr_repository.sast.repository_url
+}
+
+output "pentest_ecr_url" {
+  value = aws_ecr_repository.pentest.repository_url
+}
+
+output "sast_log_group" {
+  value = aws_cloudwatch_log_group.sast.name
+}
+
+output "pentest_log_group" {
+  value = aws_cloudwatch_log_group.pentest.name
+}
