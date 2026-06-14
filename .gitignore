@@ -20,6 +20,7 @@ terraform.tfvars
 # ── AWS credentials (never commit these) ──
 .env
 .env.*
+.env*
 *.pem
 *.key
 credentials
@@ -30,6 +31,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.pyc
 .Python
 *.egg-info/
 dist/
@@ -41,6 +43,13 @@ build/
 venv/
 .venv/
 env/
+
+# Lambda build artifacts
+api/lambda/package/
+api/lambda/lambda_function.zip
+awscliv2.zip
+aws/
+aws/
 
 # ── Docker ────────────────────────────────
 # Don't commit built image tarballs
