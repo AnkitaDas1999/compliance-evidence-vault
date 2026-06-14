@@ -125,7 +125,7 @@ resource "aws_ecs_cluster_capacity_providers" "scanners" {
 }
 
 # ---------------------------------------------------------------------------
-# ECS task definitions (using LabRole — no new IAM roles needed)
+# ECS task definitions (using LabRole - no new IAM roles needed)
 # ---------------------------------------------------------------------------
 
 resource "aws_ecs_task_definition" "sast" {
@@ -198,8 +198,24 @@ resource "aws_ecs_task_definition" "pentest" {
 # S3 lifecycle policy — Standard → Glacier after 90 days
 # ---------------------------------------------------------------------------
 
+# S3 bucket (must exist before lifecycle config)
+resource "aws_s3_bucket" "reports" {
+  bucket        = var.report_bucket_name
+  force_destroy = true
+  tags          = { Component = "ankita-compute", Owner = "ankita" }
+}
+
+resource "aws_s3_bucket_public_access_block" "reports" {
+  bucket                  = aws_s3_bucket.reports.id
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "reports" {
-  bucket = var.report_bucket_name
+  bucket     = aws_s3_bucket.reports.id
+  depends_on = [aws_s3_bucket.reports]
 
   rule {
     id     = "reports-archive"
